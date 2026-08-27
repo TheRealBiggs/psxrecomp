@@ -2637,6 +2637,28 @@ static int present_should_wall_pace(void) {
     return g_frame_period_ms > 0.0 && !present_vsync_owns_cadence();
 }
 
+extern "C" void psx_present_get_freeze_diag(double *frame_period_ms,
+                                            double *host_refresh_hz,
+                                            int *video_vsync,
+                                            int *frame_interpolation,
+                                            int *gl_active,
+                                            int *vk_active,
+                                            int *sdl_renderer_active,
+                                            int *present_vsync_disabled,
+                                            uint32_t *present_slow_count,
+                                            FramePacerDiag *pacer_diag) {
+    if (frame_period_ms) *frame_period_ms = g_frame_period_ms;
+    if (host_refresh_hz) *host_refresh_hz = g_host_refresh_hz;
+    if (video_vsync) *video_vsync = g_video_vsync;
+    if (frame_interpolation) *frame_interpolation = g_frame_interpolation;
+    if (gl_active) *gl_active = g_gl_active ? 1 : 0;
+    if (vk_active) *vk_active = g_vk_active ? 1 : 0;
+    if (sdl_renderer_active) *sdl_renderer_active = sdl_renderer ? 1 : 0;
+    if (present_vsync_disabled) *present_vsync_disabled = g_present_vsync_disabled;
+    if (present_slow_count) *present_slow_count = g_present_slow_count;
+    if (pacer_diag) frame_pacer_get_diag(&s_frame_pacer, pacer_diag);
+}
+
 static void apply_present_cadence(void) {
 #ifndef PSX_SDL_NO_RENDER
     const int interval = present_effective_swap_interval();

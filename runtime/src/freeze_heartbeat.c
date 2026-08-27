@@ -4,6 +4,7 @@
 #include "debug_server.h"
 #include "crash_trace.h"   /* g_psx_fatal_reason */
 #include "cpu_state.h"     /* g_psx_bail_* call-contract counters */
+#include "frame_pacing.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -64,6 +65,21 @@ extern uint32_t g_ra_tw_frame, g_ra_tw_in_exc, g_ra_tw_sp;
  * backpressure straight from the JSON. */
 extern uint32_t g_present_slow_count;
 extern int      g_present_vsync_disabled;
+extern void     psx_present_get_freeze_diag(double *frame_period_ms,
+                                            double *host_refresh_hz,
+                                            int *video_vsync,
+                                            int *frame_interpolation,
+                                            int *gl_active,
+                                            int *vk_active,
+                                            int *sdl_renderer_active,
+                                            int *present_vsync_disabled,
+                                            uint32_t *present_slow_count,
+                                            FramePacerDiag *pacer_diag);
+extern void     gl_renderer_interpolation_diag(int *enabled, int *suspended,
+                                               int *history_frames,
+                                               double *host_hz,
+                                               double *target_hz,
+                                               uint64_t *swaps);
 
 /* CPU register file + scratchpad — captured into the heartbeat so a logical
  * hang's exact wedged state survives in the small, user-uploadable file.
@@ -491,6 +507,37 @@ static void freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
     static char io_buf[1 << 16];
     setvbuf(f, io_buf, _IOFBF, sizeof(io_buf));
 
+    double present_frame_period_ms = 0.0;
+    double present_host_refresh_hz = 0.0;
+    int present_video_vsync = 0;
+    int present_frame_interpolation = 0;
+    int present_gl_active = 0;
+    int present_vk_active = 0;
+    int present_sdl_renderer_active = 0;
+    int present_diag_vsync_disabled = 0;
+    uint32_t present_diag_slow_count = 0;
+    FramePacerDiag pacer_diag;
+    psx_present_get_freeze_diag(&present_frame_period_ms,
+                                &present_host_refresh_hz,
+                                &present_video_vsync,
+                                &present_frame_interpolation,
+                                &present_gl_active,
+                                &present_vk_active,
+                                &present_sdl_renderer_active,
+                                &present_diag_vsync_disabled,
+                                &present_diag_slow_count,
+                                &pacer_diag);
+
+    int interp_enabled = 0;
+    int interp_suspended = 0;
+    int interp_history_frames = 0;
+    double interp_host_hz = 0.0;
+    double interp_target_hz = 0.0;
+    uint64_t interp_swaps = 0;
+    gl_renderer_interpolation_diag(&interp_enabled, &interp_suspended,
+                                   &interp_history_frames, &interp_host_hz,
+                                   &interp_target_hz, &interp_swaps);
+
     fprintf(f,
         "{\n"
         "  \"backend\":\"%s\",\n"
@@ -565,6 +612,46 @@ static void freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
         (unsigned)DUMP_CAP_RESTORE_TRACE,
         (unsigned)DUMP_CAP_FN_ENTRY,
         (unsigned)DUMP_CAP_DIRTY_BLOCK);
+
+    fprintf(f,
+        "  \"present_diag\":{\"frame_period_ms\":%.6f,"
+        "\"host_refresh_hz\":%.3f,\"video_vsync\":%d,"
+        "\"frame_interpolation\":%d,\"gl_active\":%d,\"vk_active\":%d,"
+        "\"sdl_renderer_active\":%d,\"present_vsync_disabled\":%d,"
+        "\"present_slow_count\":%u},\n"
+        "  \"frame_pacer\":{\"next_deadline\":%llu,\"wait_calls\":%llu,"
+        "\"reanchors\":%llu,\"catchup_skips\":%llu,"
+        "\"invalid_periods\":%llu,\"last_now\":%llu,\"last_freq\":%llu,"
+        "\"last_period_ticks\":%llu,\"last_sleep_ms\":%llu,"
+        "\"last_period_ms\":%.6f},\n"
+        "  \"gl_interpolation\":{\"enabled\":%d,\"suspended\":%d,"
+        "\"history_frames\":%d,\"host_hz\":%.3f,\"target_hz\":%.3f,"
+        "\"swaps\":%llu},\n",
+        present_frame_period_ms,
+        present_host_refresh_hz,
+        present_video_vsync,
+        present_frame_interpolation,
+        present_gl_active,
+        present_vk_active,
+        present_sdl_renderer_active,
+        present_diag_vsync_disabled,
+        present_diag_slow_count,
+        (unsigned long long)pacer_diag.next_deadline,
+        (unsigned long long)pacer_diag.wait_calls,
+        (unsigned long long)pacer_diag.reanchors,
+        (unsigned long long)pacer_diag.catchup_skips,
+        (unsigned long long)pacer_diag.invalid_periods,
+        (unsigned long long)pacer_diag.last_now,
+        (unsigned long long)pacer_diag.last_freq,
+        (unsigned long long)pacer_diag.last_period_ticks,
+        (unsigned long long)pacer_diag.last_sleep_ms,
+        pacer_diag.last_period_ms,
+        interp_enabled,
+        interp_suspended,
+        interp_history_frames,
+        interp_host_hz,
+        interp_target_hz,
+        (unsigned long long)interp_swaps);
 
     fputs("  \"heartbeat_ring\":[\n", f);
     uint32_t avail = s_ring_count;

@@ -27,7 +27,29 @@ extern "C" {
 
 typedef struct FramePacer {
     uint64_t next_deadline;   /* perf-counter ticks; 0 = not started */
+    uint64_t wait_calls;
+    uint64_t reanchors;
+    uint64_t catchup_skips;
+    uint64_t invalid_periods;
+    uint64_t last_now;
+    uint64_t last_freq;
+    uint64_t last_period_ticks;
+    uint64_t last_sleep_ms;
+    double   last_period_ms;
 } FramePacer;
+
+typedef struct FramePacerDiag {
+    uint64_t next_deadline;
+    uint64_t wait_calls;
+    uint64_t reanchors;
+    uint64_t catchup_skips;
+    uint64_t invalid_periods;
+    uint64_t last_now;
+    uint64_t last_freq;
+    uint64_t last_period_ticks;
+    uint64_t last_sleep_ms;
+    double   last_period_ms;
+} FramePacerDiag;
 
 /* Pure decision function (unit-testable, no SDL).
  * Given a single counter sample `now`, the current deadline, the counter
@@ -44,6 +66,8 @@ uint32_t frame_pacing_sleep_ms(uint64_t now, uint64_t deadline,
  * window, re-anchor to now + period without sleeping. period_ms is the frame
  * period in milliseconds (e.g. 1000.0 / 59.94). */
 void frame_pacer_wait(FramePacer *p, double period_ms);
+
+void frame_pacer_get_diag(const FramePacer *p, FramePacerDiag *out);
 
 #ifdef __cplusplus
 }

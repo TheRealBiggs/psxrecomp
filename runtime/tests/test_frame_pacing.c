@@ -13,15 +13,41 @@
  * sample that froze the app.
  *
  * Build: gcc -I../include -o test_frame_pacing test_frame_pacing.c
- * (includes ../src/frame_pacing.c directly with FRAME_PACING_PURE_ONLY,
- *  which compiles only the SDL-free decision function.)
+ * (includes ../src/frame_pacing.c directly with FRAME_PACING_TEST_STUBS,
+ *  which compiles the pacer against tiny host-time stubs.)
  */
 #include <stdio.h>
 #include <stdint.h>
 
-/* Pull in just the pure function — frame_pacing.c guards its SDL parts. */
-#define FRAME_PACING_PURE_ONLY 1
+/* Pull in the pacer with tiny host-time stubs instead of SDL. */
+#define FRAME_PACING_TEST_STUBS 1
 #include "../src/frame_pacing.c"
+
+static uint64_t fake_freq = 10000000ull;
+static uint64_t fake_now = 1000000000ull;
+static unsigned fake_sleep_calls = 0;
+static unsigned fake_last_sleep_ms = 0;
+
+uint64_t SDL_GetPerformanceFrequency(void) {
+    return fake_freq;
+}
+
+uint64_t SDL_GetPerformanceCounter(void) {
+    return fake_now;
+}
+
+void psx_host_sleep_ms(unsigned ms) {
+    fake_sleep_calls++;
+    fake_last_sleep_ms = ms;
+    fake_now += ((uint64_t)ms * fake_freq) / 1000ull;
+}
+
+static void reset_fake_host(void) {
+    fake_freq = 10000000ull;
+    fake_now = 1000000000ull;
+    fake_sleep_calls = 0;
+    fake_last_sleep_ms = 0;
+}
 
 static int failures = 0;
 #define CHECK(cond, msg) do { \
@@ -71,6 +97,34 @@ int main(void) {
         if (v > (PERIOD * 1000 / FREQ) + 1) { sweep_ok = 0; break; }
     }
     CHECK(sweep_ok, "tick-by-tick sweep across deadline never exceeds one period");
+
+    /* 7. Invalid frame periods must not become huge unsigned deadlines or
+     * sleeps. They reset the pacer so a later valid period starts cleanly. */
+    reset_fake_host();
+    FramePacer pacer = { 0 };
+    frame_pacer_wait(&pacer, -1.0);
+    CHECK(pacer.invalid_periods == 1 && pacer.next_deadline == 0 &&
+          fake_sleep_calls == 0,
+          "negative period is rejected without sleeping");
+    frame_pacer_wait(&pacer, 0.0);
+    CHECK(pacer.invalid_periods == 2 && pacer.next_deadline == 0 &&
+          fake_sleep_calls == 0,
+          "zero period is rejected without sleeping");
+    frame_pacer_wait(&pacer, 1001.0);
+    CHECK(pacer.invalid_periods == 3 && pacer.next_deadline == 0 &&
+          fake_sleep_calls == 0,
+          "absurd period is rejected without sleeping");
+    fake_freq = 0;
+    frame_pacer_wait(&pacer, 1000.0 / 60.0);
+    CHECK(pacer.invalid_periods == 4 && pacer.next_deadline == 0 &&
+          fake_sleep_calls == 0,
+          "zero host frequency is rejected without sleeping");
+
+    reset_fake_host();
+    frame_pacer_wait(&pacer, 1000.0 / 60.0);
+    CHECK(pacer.next_deadline > fake_now && pacer.reanchors >= 1 &&
+          pacer.last_period_ticks > 0,
+          "valid period re-anchors normally after invalid inputs");
 
     printf(failures ? "FAILED (%d)\n" : "ALL PASS\n", failures);
     return failures ? 1 : 0;
